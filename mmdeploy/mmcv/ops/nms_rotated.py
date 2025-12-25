@@ -183,14 +183,18 @@ def select_rnms_index(scores: torch.Tensor,
     batched_dets = dets.unsqueeze(0).repeat(batch_size, 1, 1)
     batch_template = torch.arange(
         0, batch_size, dtype=batch_inds.dtype, device=batch_inds.device)
-    batched_dets = batched_dets.where(
-        (batch_inds == batch_template.unsqueeze(1)).unsqueeze(-1),
-        batched_dets.new_zeros(1))
+    
+    # Fix batched_dets.where() with explicit float32 type
+    cond_dets_rot = (batch_inds == batch_template.unsqueeze(1)).unsqueeze(-1)
+    else_dets_rot = torch.zeros((1,), dtype=torch.float32, device=batched_dets.device)
+    batched_dets = torch.where(cond_dets_rot, batched_dets, else_dets_rot)
 
     batched_labels = cls_inds.unsqueeze(0).repeat(batch_size, 1)
-    batched_labels = batched_labels.where(
-        (batch_inds == batch_template.unsqueeze(1)),
-        batched_labels.new_ones(1) * -1)
+    
+    # Fix batched_labels.where() with explicit int64 type
+    cond_rot = (batch_inds == batch_template.unsqueeze(1))
+    else_rot = torch.full_like(batched_labels, -1, dtype=torch.int64)
+    batched_labels = torch.where(cond_rot, batched_labels.to(torch.int64), else_rot)
 
     N = batched_dets.shape[0]
 

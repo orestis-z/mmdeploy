@@ -1,6 +1,7 @@
 _base_ = ['./pose-detection_static.py', '../_base_/backends/onnxruntime.py']
 
 onnx_config = dict(
+    opset_version=17,
     output_names=['dets', 'keypoints'],
     dynamic_axes={
         'input': {
@@ -12,7 +13,8 @@ onnx_config = dict(
         'keypoints': {
             0: 'batch'
         }
-    })
+    }
+    )
 
 codebase_config = dict(
     post_processing=dict(

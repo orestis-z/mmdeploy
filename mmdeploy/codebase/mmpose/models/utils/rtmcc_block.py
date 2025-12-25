@@ -20,7 +20,9 @@ def scalenorm__forward__ncnn(self, x):
     norm = torch.norm(x, dim=2, keepdim=True)
     norm = norm * self.scale
     # Rewrite for ncnn binaryop broadcast.
+    print(f"DEBUG rtmcc_block clamp: norm.dtype={norm.dtype}, self.eps={self.eps}, type={type(self.eps)}")
     norm = norm.clamp(min=self.eps)
+    print(f"DEBUG rtmcc_block after clamp: norm.dtype={norm.dtype}")
     return (x.unsqueeze(2) / norm.unsqueeze(2)).squeeze(2) * self.g
 
 

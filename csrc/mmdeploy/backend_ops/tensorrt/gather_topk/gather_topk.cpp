@@ -78,10 +78,19 @@ size_t GatherTopk::getWorkspaceSize(const nvinfer1::PluginTensorDesc *inputs, in
 int GatherTopk::enqueue(const nvinfer1::PluginTensorDesc *inputDesc,
                         const nvinfer1::PluginTensorDesc *outputDesc, const void *const *inputs,
                         void *const *outputs, void *workSpace, cudaStream_t stream) TRT_NOEXCEPT {
-  const int *dims = &(inputDesc[0].dims.d[0]);
-  const int *indices_dims = &(inputDesc[1].dims.d[0]);
   int nbDims = inputDesc[0].dims.nbDims;
   int indice_nbDims = inputDesc[1].dims.nbDims;
+
+  // Convert int64_t dimensions to int for kernel compatibility
+  std::vector<int> dims(nbDims);
+  std::vector<int> indices_dims(indice_nbDims);
+  
+  for (int i = 0; i < nbDims; ++i) {
+    dims[i] = static_cast<int>(inputDesc[0].dims.d[i]);
+  }
+  for (int i = 0; i < indice_nbDims; ++i) {
+    indices_dims[i] = static_cast<int>(inputDesc[1].dims.d[i]);
+  }
 
   const void *data = inputs[0];
   const void *indices = inputs[1];
@@ -91,12 +100,12 @@ int GatherTopk::enqueue(const nvinfer1::PluginTensorDesc *inputDesc,
 
   switch (data_type) {
     case nvinfer1::DataType::kFLOAT:
-      gather_topk_impl<float>((float *)data, (int *)indices, dims, nbDims, indices_dims,
+      gather_topk_impl<float>((float *)data, (int *)indices, dims.data(), nbDims, indices_dims.data(),
                               indice_nbDims, (float *)output, stream);
       break;
 
     case nvinfer1::DataType::kINT32:
-      gather_topk_impl<int>((int *)data, (int *)indices, dims, nbDims, indices_dims, indice_nbDims,
+      gather_topk_impl<int>((int *)data, (int *)indices, dims.data(), nbDims, indices_dims.data(), indice_nbDims,
                             (int *)output, stream);
       break;
     default:

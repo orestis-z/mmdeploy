@@ -103,11 +103,7 @@ class ONNXNMSop(torch.autograd.Function):
 
 
 class TRTBatchedNMSop(torch.autograd.Function):
-    """Create mmdeploy::TRTBatchedNMS op for TensorRT backend.
-
-    NMS in ONNX supports dynamic outputs. This class helps replace
-    onnx::NonMaxSuppression with mmdeploy::TRTBatchedNMS.
-    """
+    """Create mmdeploy::TRTBatchedNMS op for TensorRT backend."""
 
     @staticmethod
     def forward(ctx,
@@ -120,39 +116,16 @@ class TRTBatchedNMSop(torch.autograd.Function):
                 score_threshold: float,
                 background_label_id: int = -1,
                 return_index: bool = False):
-        """Forward of batched nms.
-
-        Args:
-            ctx (Context): The context with meta information.
-            boxes (Tensor): The bounding boxes of shape [N, num_boxes, 4].
-            scores (Tensor): The detection scores of shape
-                [N, num_boxes, num_classes].
-            num_classes (int): MThe number of classes in the network.
-            pre_topk (int): The number of bounding boxes to be fed into
-                the NMS step.
-            after_topk (int): The number of total bounding boxes to be kept
-                per-image after the NMS step. Should be less than or equal
-                to the pre_topk value.
-            iou_threshold (float): IOU threshold of nms.
-            score_threshold (float): score threshold of nms.
-            background_label_id (int): The label ID for the background class.
-                If there is no background class, set it to -1.
-
-        Returns:
-            Tensor: Selected indices of boxes. 2-D tensor of shape
-            (num_selected_indices, 3) with each row of
-            [batch_index, class_index, box_index]. Note it is generated
-            randomly to make it exportable to onnx.
-        """
         batch_size, num_boxes, num_classes = scores.shape
 
         out_boxes = min(num_boxes, after_topk)
+        # Use int32 for mock indices to match TensorRT plugin behavior
         ret = (torch.rand(batch_size, out_boxes, 5).to(scores.device),
                torch.randint(0, num_classes,
-                             (batch_size, out_boxes)).to(scores.device))
+                             (batch_size, out_boxes), dtype=torch.int32).to(scores.device))
         if return_index:
             ret = ret + (torch.randint(
-                0, out_boxes, (batch_size, out_boxes)).to(scores.device), )
+                0, out_boxes, (batch_size, out_boxes), dtype=torch.int32).to(scores.device), )
         return ret
 
     @staticmethod
@@ -190,77 +163,74 @@ def _select_nms_index(scores: torch.Tensor,
                       keep_top_k: int = -1,
                       pre_inds: torch.Tensor = None,
                       output_index: bool = False):
-    """Transform NMS output.
+    """Transform NMS output using Int32 for TensorRT compatibility."""
+    
+    # Ensure indices are Int32 to match plugin output
+    batch_inds = nms_index[:, 0].to(torch.int32)
+    cls_inds = nms_index[:, 1].to(torch.int32)
+    box_inds = nms_index[:, 2].to(torch.int32)
 
-    Args:
-        scores (Tensor): The detection scores of shape
-            [N, num_classes, num_boxes].
-        boxes (Tensor): The bounding boxes of shape [N, num_boxes, 4].
-        nms_index (Tensor): NMS output of bounding boxes indexing.
-        batch_size (int): Batch size of the input image.
-        keep_top_k (int): Number of top K boxes to keep after nms.
-            Defaults to -1.
-        pre_inds (Tensor): The pre-topk indices of boxes before nms.
-            Defaults to None.
-        return_index (bool): Whether to return indices of original bboxes.
-            Defaults to False.
-
-    Returns:
-        tuple[Tensor, Tensor]: (dets, labels), `dets` of shape [N, num_det, 5]
-            and `labels` of shape [N, num_det].
-    """
-    batch_inds, cls_inds = nms_index[:, 0], nms_index[:, 1]
-    box_inds = nms_index[:, 2]
-
-    # index by nms output
-    scores = scores[batch_inds, cls_inds, box_inds].unsqueeze(1)
-    boxes = boxes[batch_inds, box_inds, ...]
+    # Index by nms output
+    scores = scores[batch_inds.long(), cls_inds.long(), box_inds.long()].unsqueeze(1)
+    boxes = boxes[batch_inds.long(), box_inds.long(), ...]
     dets = torch.cat([boxes, scores], dim=1)
 
-    # batch all
+    # Batch all logic using Int32 template
     batched_dets = dets.unsqueeze(0).repeat(batch_size, 1, 1)
+    
+    # CRITICAL: Force dtype=torch.int32 for batch_template to prevent Int64 promotion
     batch_template = torch.arange(
-        0, batch_size, dtype=batch_inds.dtype, device=batch_inds.device)
-    batched_dets = batched_dets.where(
-        (batch_inds == batch_template.unsqueeze(1)).unsqueeze(-1),
-        batched_dets.new_zeros(1))
+        0, batch_size, dtype=torch.int32, device=batch_inds.device)
+    
+    # Handle Dets
+    cond_dets = (batch_inds == batch_template.unsqueeze(1)).unsqueeze(-1)
+    else_dets = torch.zeros((1,), dtype=torch.float32, device=batched_dets.device)
+    batched_dets = torch.where(cond_dets, batched_dets, else_dets)
 
+    # Handle Labels (Keep Int32)
     batched_labels = cls_inds.unsqueeze(0).repeat(batch_size, 1)
-    batched_labels = batched_labels.where(
-        (batch_inds == batch_template.unsqueeze(1)),
-        batched_labels.new_ones(1) * -1)
+    cond_labels = (batch_inds == batch_template.unsqueeze(1))
+    else_labels = torch.zeros((1,), dtype=torch.int32, device=batched_labels.device)
+    batched_labels = torch.where(cond_labels, batched_labels, else_labels)
 
     N = batched_dets.shape[0]
 
-    # expand tensor to eliminate [0, ...] tensor
-    batched_dets = torch.cat((batched_dets, batched_dets.new_zeros((N, 1, 5))),
-                             1)
-    batched_labels = torch.cat((batched_labels, batched_labels.new_zeros(
-        (N, 1))), 1)
+    # Pad to eliminate [0, ...] tensor
+    batched_dets = torch.cat((batched_dets, batched_dets.new_zeros((N, 1, 5))), 1)
+    batched_labels = torch.cat((batched_labels, batched_labels.new_zeros((N, 1), dtype=torch.int32)), 1)
+    
     if output_index and pre_inds is not None:
-        # batch all
-        pre_inds = pre_inds[batch_inds, box_inds]
+        # Pre-indices usually come from TopK (Int64), cast to Int32 for the math
+        pre_inds = pre_inds[batch_inds.long(), box_inds.long()].to(torch.int32)
         pre_inds = pre_inds.unsqueeze(0).repeat(batch_size, 1)
-        pre_inds = pre_inds.where((batch_inds == batch_template.unsqueeze(1)),
-                                  pre_inds.new_zeros(1))
-        pre_inds = torch.cat((pre_inds, -pre_inds.new_ones((N, 1))), 1)
-    # sort
+        
+        cond_pre = (batch_inds == batch_template.unsqueeze(1))
+        else_pre = -torch.ones((1,), dtype=torch.int32, device=pre_inds.device)
+        pre_inds = torch.where(cond_pre, pre_inds, else_pre)
+        
+        pre_inds = torch.cat((pre_inds, -pre_inds.new_ones((N, 1), dtype=torch.int32)), 1)
+
+    # Sort logic - remain in Int32 where possible
     is_use_topk = keep_top_k > 0 and \
         (torch.onnx.is_in_onnx_export() or keep_top_k < batched_dets.shape[1])
+    
     if is_use_topk:
         _, topk_inds = batched_dets[:, :, -1].topk(keep_top_k, dim=1)
     else:
         _, topk_inds = batched_dets[:, :, -1].sort(dim=1, descending=True)
+        
     topk_batch_inds = torch.arange(
         batch_size, dtype=topk_inds.dtype,
         device=topk_inds.device).view(-1, 1)
+        
     batched_dets = batched_dets[topk_batch_inds, topk_inds, ...]
     batched_labels = batched_labels[topk_batch_inds, topk_inds, ...]
+    
     if output_index:
         if pre_inds is not None:
             topk_inds = pre_inds[topk_batch_inds, topk_inds, ...]
         return batched_dets, batched_labels, topk_inds
-    # slice and recover the tensor
+        
     return batched_dets, batched_labels
 
 
@@ -289,10 +259,18 @@ def _multiclass_nms(boxes: Tensor,
     if pre_top_k > 0:
         max_scores, _ = scores.max(-1)
         _, topk_inds = max_scores.topk(pre_top_k)
-        batch_inds = torch.arange(
-            batch_size, device=scores.device).view(-1, 1).long()
-        boxes = boxes[batch_inds, topk_inds, :]
-        scores = scores[batch_inds, topk_inds, :]
+        
+        # Use torch.gather to keep the dimensions explicit and batch-aligned
+        # This often prevents the creation of the symbolic TopK_... names
+        batch_size, num_boxes, num_channels = boxes.shape
+        
+        # Expand indices to match the boxes shape [batch, pre_top_k, 4]
+        gather_inds = topk_inds.unsqueeze(-1).expand(-1, -1, 4)
+        boxes = torch.gather(boxes, 1, gather_inds)
+        
+        # Expand indices for scores [batch, pre_top_k, num_classes]
+        gather_inds_scores = topk_inds.unsqueeze(-1).expand(-1, -1, scores.size(-1))
+        scores = torch.gather(scores, 1, gather_inds_scores)
 
     scores = scores.permute(0, 2, 1)
     selected_indices = ONNXNMSop.apply(boxes, scores,
@@ -628,7 +606,7 @@ def multiclass_nms__torchscript(boxes: Tensor,
     num_boxes = scores.shape[1]
     num_classes = scores.shape[2]
     box_per_cls = len(boxes.shape) == 4
-    scores = torch.where(scores > score_threshold, scores, scores.new_zeros(1))
+    scores = torch.where(scores > score_threshold, scores, scores.new_zeros(1, dtype=scores.dtype))
     pre_topk_inds = None
     # pre-topk
     if pre_top_k > 0:

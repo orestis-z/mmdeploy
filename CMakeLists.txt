@@ -11,6 +11,12 @@ endif ()
 cmake_minimum_required(VERSION 3.14)
 project(MMDeploy VERSION 1.3.1)
 
+# Global override to force C++17 regardless of what sub-modules or dependencies claim
+add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-std=c++17>")
+if(NOT MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:-std=c++17>")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 
 set(MMDEPLOY_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})

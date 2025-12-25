@@ -38,6 +38,11 @@ if("cuda" IN_LIST MMDEPLOY_TARGET_DEVICES)
         PRIVATE ${CUDA_TOOLKIT_ROOT_DIR}/include)
 endif()
 target_link_libraries(${PROJECT_NAME}_obj PRIVATE ${TORCH_LIBRARIES})
+# Force C++17 to override the flags imported by find_package(Torch)
+target_compile_options(${PROJECT_NAME}_obj PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-std=c++17>")
+if("cuda" IN_LIST MMDEPLOY_TARGET_DEVICES)
+    target_compile_options(${PROJECT_NAME}_obj PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:-std=c++17>")
+endif()
 mmdeploy_export(${PROJECT_NAME}_obj)
 
 # Build module library. It is used to inference with torchscript

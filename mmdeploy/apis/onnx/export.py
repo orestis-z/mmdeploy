@@ -135,6 +135,7 @@ def export(model: torch.nn.Module,
             args = tuple([_.cpu() for _ in args])
         else:
             raise RuntimeError(f'Not supported args: {args}')
+        print(input_names, output_names, opset_version, dynamic_axes, keep_initializers_as_inputs)
         torch.onnx.export(
             patched_model,
             args,
@@ -149,3 +150,11 @@ def export(model: torch.nn.Module,
 
         if input_metas is not None:
             patched_model.forward = model_forward
+    
+    # Post-process ONNX model to fix type mismatches (temporarily disabled for debugging)
+    # try:
+    #     from mmdeploy.backend.onnx.onnx_optimizer import optimize_onnx_model
+    #     optimize_onnx_model(output_path, output_path)
+    #     logger.info('Applied ONNX post-processing optimizations.')
+    # except Exception as e:
+    #     logger.warning(f'Failed to apply ONNX post-processing: {e}')

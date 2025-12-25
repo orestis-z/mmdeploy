@@ -9,6 +9,7 @@ import mmengine
 import torch.multiprocessing as mp
 from torch.multiprocessing import Process, set_start_method
 
+from mmpose.utils import register_all_modules
 from mmdeploy.apis import (create_calib_input_data, extract_model,
                            get_predefined_partition_cfg, torch2onnx,
                            torch2torchscript, visualize_model)
@@ -102,6 +103,7 @@ def torch2ir(ir_type: IR):
 
 def main():
     args = parse_args()
+    register_all_modules()
     set_start_method('spawn', force=True)
     logger = get_root_logger()
     log_level = logging.getLevelName(args.log_level)

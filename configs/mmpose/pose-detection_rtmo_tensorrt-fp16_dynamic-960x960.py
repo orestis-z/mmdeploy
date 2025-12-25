@@ -1,6 +1,7 @@
 _base_ = ['./pose-detection_static.py', '../_base_/backends/tensorrt-fp16.py']
 
 onnx_config = dict(
+    opset_version=17,
     output_names=['dets', 'keypoints'],
     dynamic_axes={
         'input': {
@@ -21,8 +22,8 @@ backend_config = dict(
             input_shapes=dict(
                 input=dict(
                     min_shape=[1, 3, 960, 960],
-                    opt_shape=[12, 3, 960, 960],
-                    max_shape=[12, 3, 960, 960])))
+                    opt_shape=[8, 3, 960, 960],
+                    max_shape=[8, 3, 960, 960])))
     ])
 
 codebase_config = dict(
